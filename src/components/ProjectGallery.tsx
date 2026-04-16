@@ -29,64 +29,71 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderDesc, setNewFolderDesc] = useState('');
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isAddImageOpen, setIsAddImageOpen] = useState(false);
+  const [newImageUrl, setNewImageUrl] = useState('');
+  const [newImageTitle, setNewImageTitle] = useState('');
+  const [newImageDesc, setNewImageDesc] = useState('');
 
-  const fetchFolders = async () => {
+  const LOCAL_STORAGE_KEY = 'portfolio_data';
+
+  interface StorageData {
+    folders: Folder[];
+    projects: Record<string, Project[]>;
+  }
+
+  const getStorageData = (): StorageData => {
     try {
-      const response = await fetch('/api/folders');
-      if (!response.ok) throw new Error('Failed to fetch folders');
-      
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Expected JSON, got:', text.substring(0, 100));
-        throw new Error('Server returned non-JSON response');
-      }
-      
-      const data = await response.json();
-      setFolders(data.folders);
-      setError(null);
-    } catch (err) {
-      console.error(err);
-      setError('Could not load folders. Please try again later.');
-    } finally {
-      setLoading(false);
+      const data = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (data) return JSON.parse(data);
+    } catch (e) {
+      console.error('Failed to parse local storage data', e);
+    }
+    
+    // Default data if none exists
+    const defaultData: StorageData = {
+      folders: [
+        { id: 'Residential Projects', name: 'Residential Projects', thumbnailUrl: null, imageCount: 0, description: '' },
+        { id: 'Academic Buildings Projects', name: 'Academic Buildings Projects', thumbnailUrl: null, imageCount: 0, description: '' },
+        { id: 'Hospital Projects', name: 'Hospital Projects', thumbnailUrl: null, imageCount: 0, description: '' },
+        { id: 'Office - Industry Projects', name: 'Office - Industry Projects', thumbnailUrl: null, imageCount: 0, description: '' },
+        { id: 'Hospitality Projects', name: 'Hospitality Projects', thumbnailUrl: null, imageCount: 0, description: '' },
+      ],
+      projects: {}
+    };
+    try {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(defaultData));
+    } catch (e) {}
+    return defaultData;
+  };
+
+  const saveStorageData = (data: StorageData) => {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('Failed to save to local storage', e);
     }
   };
 
-  const fetchProjects = async (folderName: string) => {
+  const fetchFolders = () => {
+    const data = getStorageData();
+    setFolders(data.folders);
+    setLoading(false);
+    setError(null);
+  };
+
+  const fetchProjects = (folderName: string) => {
     setLoading(true);
-    try {
-      const response = await fetch(`/api/folders/${encodeURIComponent(folderName)}/images`);
-      if (!response.ok) throw new Error('Failed to fetch projects');
-      
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Expected JSON, got:', text.substring(0, 100));
-        throw new Error('Server returned non-JSON response');
-      }
-      
-      const data = await response.json();
-      setProjects(data.projects);
-      setError(null);
-    } catch (err) {
-      console.error(err);
-      setError('Could not load projects. Please try again later.');
-    } finally {
-      setLoading(false);
-    }
+    const data = getStorageData();
+    setProjects(data.projects[folderName] || []);
+    setLoading(false);
+    setError(null);
   };
 
   useEffect(() => {
     if (currentFolder) {
       fetchProjects(currentFolder);
-      const interval = setInterval(() => fetchProjects(currentFolder), 5000);
-      return () => clearInterval(interval);
     } else {
       fetchFolders();
-      const interval = setInterval(fetchFolders, 5000);
-      return () => clearInterval(interval);
     }
   }, [currentFolder]);
 
@@ -96,56 +103,82 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
     setIsCreateFolderOpen(true);
   };
 
-  const submitCreateFolder = async () => {
+  const submitCreateFolder = () => {
     if (!newFolderName.trim()) return;
     
-    try {
-      const res = await fetch('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newFolderName.trim(), description: newFolderDesc.trim() })
-      });
-      if (res.ok) {
-        setIsCreateFolderOpen(false);
-        fetchFolders();
-      }
-    } catch (err) {
-      console.error('Failed to create folder', err);
+    const data = getStorageData();
+    const newName = newFolderName.trim();
+    if (data.folders.some(f => f.name === newName)) {
+      alert('Folder already exists');
+      return;
     }
+
+    data.folders.push({
+      id: newName,
+      name: newName,
+      thumbnailUrl: null,
+      imageCount: 0,
+      description: newFolderDesc.trim()
+    });
+    
+    saveStorageData(data);
+    setIsCreateFolderOpen(false);
+    fetchFolders();
   };
 
-  const handleSaveFolder = async (e: React.MouseEvent, oldName: string) => {
+  const handleSaveFolder = (e: React.MouseEvent, oldName: string) => {
     e.stopPropagation();
-    try {
-      const res = await fetch(`/api/folders/${encodeURIComponent(oldName)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editFolderName, description: editFolderDesc })
-      });
-      if (res.ok) {
-        setEditingFolder(null);
-        fetchFolders();
-      }
-    } catch (err) {
-      console.error('Failed to update folder', err);
+    const data = getStorageData();
+    
+    // Check if new name exists and is different
+    if (editFolderName !== oldName && data.folders.some(f => f.name === editFolderName)) {
+      alert('A folder with this name already exists');
+      return;
     }
+
+    const folderIndex = data.folders.findIndex(f => f.name === oldName);
+    if (folderIndex !== -1) {
+      data.folders[folderIndex] = {
+        ...data.folders[folderIndex],
+        name: editFolderName,
+        description: editFolderDesc,
+        id: editFolderName
+      };
+      
+      // Update projects folder reference if name changed
+      if (editFolderName !== oldName) {
+        data.projects[editFolderName] = data.projects[oldName] || [];
+        data.projects[editFolderName].forEach(p => p.folder = editFolderName);
+        delete data.projects[oldName];
+      }
+      
+      saveStorageData(data);
+    }
+    
+    setEditingFolder(null);
+    fetchFolders();
   };
 
-  const handleSaveProject = async (e: React.MouseEvent, filename: string) => {
+  const handleSaveProject = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (!currentFolder) return;
-    try {
-      const res = await fetch(`/api/folders/${encodeURIComponent(currentFolder)}/images/${encodeURIComponent(filename)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: editProjectTitle, description: editProjectDesc })
-      });
-      if (res.ok) {
-        setEditingProject(null);
-        fetchProjects(currentFolder);
-      }
-    } catch (err) {
-      console.error('Failed to update project', err);
+    
+    const data = getStorageData();
+    const folderProjects = data.projects[currentFolder] || [];
+    const projectIndex = folderProjects.findIndex(p => p.id === id);
+    
+    if (projectIndex !== -1) {
+      folderProjects[projectIndex] = {
+        ...folderProjects[projectIndex],
+        title: editProjectTitle,
+        description: editProjectDesc
+      };
+      
+      data.projects[currentFolder] = folderProjects;
+      saveStorageData(data);
+      
+      setEditingProject(null);
+      fetchProjects(currentFolder);
     }
   };
 
@@ -154,54 +187,79 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
     setDeleteTarget({ type: 'folder', id: folderName });
   };
 
-  const handleUploadClick = () => {
-    fileInputRef.current?.click();
+  const handleAddImageClick = () => {
+    setNewImageUrl('');
+    setNewImageTitle('');
+    setNewImageDesc('');
+    setIsAddImageOpen(true);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !currentFolder) return;
-
-    const formData = new FormData();
-    formData.append('image', file);
-
-    try {
-      const res = await fetch(`/api/folders/${encodeURIComponent(currentFolder)}/images`, {
-        method: 'POST',
-        body: formData
-      });
-      if (res.ok) {
-        fetchProjects(currentFolder);
+  const submitAddImage = () => {
+    if (!newImageUrl.trim() || !currentFolder) return;
+    
+    const data = getStorageData();
+    const newProject: Project = {
+      id: Date.now().toString(),
+      title: newImageTitle.trim() || 'Untitled',
+      filename: Date.now().toString(),
+      url: newImageUrl.trim(),
+      description: newImageDesc.trim(),
+      folder: currentFolder
+    };
+    
+    if (!data.projects[currentFolder]) {
+      data.projects[currentFolder] = [];
+    }
+    data.projects[currentFolder].push(newProject);
+    
+    // Update folder image count and thumbnail
+    const folderIndex = data.folders.findIndex(f => f.name === currentFolder);
+    if (folderIndex !== -1) {
+      data.folders[folderIndex].imageCount = data.projects[currentFolder].length;
+      if (data.projects[currentFolder].length === 1) {
+        data.folders[folderIndex].thumbnailUrl = newProject.url;
       }
-    } catch (err) {
-      console.error('Failed to upload image', err);
     }
     
-    // Reset input
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    saveStorageData(data);
+    setIsAddImageOpen(false);
+    fetchProjects(currentFolder);
   };
 
-  const handleDeleteImageClick = (e: React.MouseEvent, filename: string) => {
+  const handleDeleteImageClick = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    setDeleteTarget({ type: 'image', id: filename });
+    setDeleteTarget({ type: 'image', id: id });
   };
 
-  const confirmDelete = async () => {
+  const confirmDelete = () => {
     if (!deleteTarget) return;
 
-    try {
-      if (deleteTarget.type === 'folder') {
-        const res = await fetch(`/api/folders/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
-        if (res.ok) fetchFolders();
-      } else if (deleteTarget.type === 'image' && currentFolder) {
-        const res = await fetch(`/api/folders/${encodeURIComponent(currentFolder)}/images/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
-        if (res.ok) fetchProjects(currentFolder);
+    const data = getStorageData();
+    
+    if (deleteTarget.type === 'folder') {
+      data.folders = data.folders.filter(f => f.name !== deleteTarget.id);
+      delete data.projects[deleteTarget.id];
+      saveStorageData(data);
+      fetchFolders();
+    } else if (deleteTarget.type === 'image' && currentFolder) {
+      const folderProjects = data.projects[currentFolder] || [];
+      data.projects[currentFolder] = folderProjects.filter(p => p.id !== deleteTarget.id);
+      
+      // Update folder metadata
+      const folderIndex = data.folders.findIndex(f => f.name === currentFolder);
+      if (folderIndex !== -1) {
+        data.folders[folderIndex].imageCount = data.projects[currentFolder].length;
+        if (data.projects[currentFolder].length === 0) {
+          data.folders[folderIndex].thumbnailUrl = null;
+        } else if (data.folders[folderIndex].thumbnailUrl === folderProjects.find(p => p.id === deleteTarget.id)?.url) {
+           data.folders[folderIndex].thumbnailUrl = data.projects[currentFolder][0].url;
+        }
       }
-    } catch (err) {
-      console.error('Failed to delete', err);
-    } finally {
-      setDeleteTarget(null);
+      
+      saveStorageData(data);
+      fetchProjects(currentFolder);
     }
+    setDeleteTarget(null);
   };
 
   if (loading && folders.length === 0 && projects.length === 0) {
@@ -376,7 +434,7 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
                   
                   {isAdmin && (
                     <button 
-                      onClick={(e) => handleDeleteImageClick(e, project.filename)}
+                      onClick={(e) => handleDeleteImageClick(e, project.id)}
                       className="absolute top-4 right-4 p-2 bg-white/90 text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 shadow-sm z-10"
                       title="Delete Image"
                     >
@@ -401,7 +459,7 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
                       rows={2}
                     />
                     <div className="flex gap-2 mt-1">
-                      <button onClick={(e) => handleSaveProject(e, project.filename)} className="flex-1 bg-blue-600 text-white py-1 rounded text-sm font-medium hover:bg-blue-700 transition-colors">Save</button>
+                      <button onClick={(e) => handleSaveProject(e, project.id)} className="flex-1 bg-blue-600 text-white py-1 rounded text-sm font-medium hover:bg-blue-700 transition-colors">Save</button>
                       <button onClick={(e) => { e.stopPropagation(); setEditingProject(null); }} className="flex-1 bg-zinc-200 text-zinc-700 py-1 rounded text-sm font-medium hover:bg-zinc-300 transition-colors">Cancel</button>
                     </div>
                   </div>
@@ -439,21 +497,14 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="group cursor-pointer flex flex-col"
-                onClick={handleUploadClick}
+                onClick={handleAddImageClick}
               >
                 <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-zinc-50 mb-4 border-2 border-dashed border-zinc-300 flex flex-col items-center justify-center transition-colors group-hover:border-zinc-400 group-hover:bg-zinc-100">
                   <div className="w-12 h-12 rounded-full bg-white shadow-sm flex items-center justify-center mb-3 text-zinc-400 group-hover:text-zinc-600 transition-colors">
                     <Upload size={24} />
                   </div>
-                  <span className="font-medium text-zinc-500 group-hover:text-zinc-700">Upload Image</span>
+                  <span className="font-medium text-zinc-500 group-hover:text-zinc-700">Add Image URL</span>
                 </div>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  accept="image/*" 
-                  onChange={handleFileChange} 
-                />
               </motion.div>
             )}
             
@@ -540,6 +591,61 @@ export function ProjectGallery({ isAdmin = false }: ProjectGalleryProps) {
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
               >
                 Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Image Modal */}
+      {isAddImageOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-xl font-bold text-zinc-900 mb-4">Add Image via URL</h3>
+            <div className="space-y-4 mb-6">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Image URL *</label>
+                <input
+                  type="url"
+                  value={newImageUrl}
+                  onChange={e => setNewImageUrl(e.target.value)}
+                  placeholder="https://example.com/image.jpg"
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Title (Optional)</label>
+                <input
+                  type="text"
+                  value={newImageTitle}
+                  onChange={e => setNewImageTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Description (Optional)</label>
+                <textarea
+                  value={newImageDesc}
+                  onChange={e => setNewImageDesc(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  rows={3}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setIsAddImageOpen(false)}
+                className="px-4 py-2 text-zinc-700 hover:bg-zinc-100 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitAddImage}
+                disabled={!newImageUrl.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              >
+                Add Image
               </button>
             </div>
           </div>
